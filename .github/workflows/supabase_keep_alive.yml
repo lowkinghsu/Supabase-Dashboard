@@ -1,0 +1,27 @@
+name: Supabase Keep Alive
+
+on:
+  schedule:
+    # 每天 UTC 00:00 (台灣時間早上 08:00) 自動執行一次
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 支援在 GitHub 網頁手動點擊「Run workflow」按鈕測試
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          echo "Pinging Supabase to prevent project pausing..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X GET \
+            "https://wnyckiumewmvvvoglkyd.supabase.co/rest/v1/denoise_usage_log?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          
+          echo "Supabase Response Status Code: $HTTP_STATUS"
+          
+          if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 206 ]; then
+            echo "✅ Supabase is active and alive!"
+          else
+            echo "⚠️ Warning: Received HTTP $HTTP_STATUS. Please check your URL and Secrets."
+          fi
