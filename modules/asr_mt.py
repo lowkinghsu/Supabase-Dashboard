@@ -110,16 +110,16 @@ def render_asr_mt_page():
     DIALECT_MAP = {
         "阿美語 (Amis)": "formosan_ami", "泰雅語 (Atayal)": "formosan_tay", "排灣語 (Paiwan)": "formosan_pwn",
         "布農語 (Bunun)": "formosan_bnn", "卑南語 (Puyuma)": "formosan_pyu", "魯凱語 (Rukai)": "formosan_dru",
-        "鄒語 (Tsou)": "formosan_tsu", "賽夏語 (Saisiyat)": "formosan_sai", "達悟語 (Tao)": "formosan_tao",
-        "邵語 (Thao)": "formosan_tha", "噶瑪蘭語 (Kavalan)": "formosan_ckv", "太魯閣語 (Truku)": "formosan_trv",
+        "鄒語 (Cou)": "formosan_tsu", "賽夏語 (SaySiyat)": "formosan_sai", "達悟語 (Tao)": "formosan_tao",
+        "邵語 (Thau)": "formosan_tha", "噶瑪蘭語 (kebalan)": "formosan_ckv", "太魯閣語 (Truku)": "formosan_trv",
         "撒奇萊雅語 (Sakizaya)": "formosan_szy", "賽德克語 (Seediq)": "formosan_sed", "拉阿魯哇語 (Hla'alua)": "formosan_hlv",
         "卡那卡那富語 (Kanakanavu)": "formosan_xnb"
     }
 
     MT_ETHNICITY_MAP = {
         "阿美語 (Amis)": "阿美", "泰雅語 (Atayal)": "泰雅", "排灣語 (Paiwan)": "排灣", "布農語 (Bunun)": "布農",
-        "卑南語 (Puyuma)": "卑南", "魯凱語 (Rukai)": "魯凱", "鄒語 (Tsou)": "鄒", "賽夏語 (Saisiyat)": "賽夏",
-        "達悟語 (Tao)": "雅美", "邵語 (Thao)": "邵", "噶瑪蘭語 (Kavalan)": "噶瑪蘭", "太魯閣語 (Truku)": "太魯閣",
+        "卑南語 (Puyuma)": "卑南", "魯凱語 (Rukai)": "魯凱", "鄒語 (Cou)": "鄒", "賽夏語 (SaySiyat)": "賽夏",
+        "達悟語 (Tao)": "雅美", "邵語 (Thau)": "邵", "噶瑪蘭語 (kebalan)": "噶瑪蘭", "太魯閣語 (Truku)": "太魯閣",
         "撒奇萊雅語 (Sakizaya)": "撒奇萊雅", "賽德克語 (Seediq)": "賽德克", "拉阿魯哇語 (Hla'alua)": "拉阿魯哇",
         "卡那卡那富語 (Kanakanavu)": "卡那卡那富"
     }
@@ -129,7 +129,9 @@ def render_asr_mt_page():
     with col1:
         st.subheader("1️⃣ 語音辨識 (生成 SRT)")
         selected_lang = st.selectbox("請選擇檔案的族語語別：", list(DIALECT_MAP.keys()))
-        asr_file = st.file_uploader("請上傳要辨識的影音檔", type=["wav", "mp3", "m4a", "flac", "mp4", "mov", "avi"])
+        # 🎯 修正：原本漏了 aac（降噪頁面、log_usage 都早就把 aac 當成合法音檔），
+        # 造成使用者在這裡連選都選不到 .aac 檔案
+        asr_file = st.file_uploader("請上傳要辨識的影音檔", type=["wav", "mp3", "m4a", "aac", "flac", "mp4", "mov", "avi"])
         
         if asr_file:
             file_ext = os.path.splitext(asr_file.name)[1].lower()
