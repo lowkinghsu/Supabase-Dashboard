@@ -241,61 +241,76 @@ def render_asr_mt_page():
             st.session_state.asr_result = edited_asr_text
             
             # 🎯 【修正對齊】整套 Gemini 邏輯精確對齊 12 個空格
-            if st.session_state.get("gemini_key"):
-                st.markdown("**✨ Gemini AI 進階處理**")
-                
-                # 💡 【防爆機制 1】初始化安全狀態鎖與冷卻機制
-                if "gemini_processing" not in st.session_state:
-                    st.session_state.gemini_processing = False
+            st.markdown("**✨ Gemini AI 進階處理**")
 
-                # 💡 【防爆機制 2】執行期間將按鈕禁用（Disabled），防止人類肉體連擊
-                # 🎯 隱形標記錨點：讓 utils.py 的 CSS 能穩定抓到「這顆」按鈕上紅色警示樣式，
-                # 不再依賴會被頁面改版打亂的第幾個元件計數（對應 utils.py 的 .ilrdf-gemini-btn-marker 規則）
-                st.markdown('<span class="ilrdf-gemini-btn-marker"></span>', unsafe_allow_html=True)
-                if st.button(
-                    "🚀 AI直接翻譯雙語字幕",
-                    key="gemini_flash_btn", 
-                    use_container_width=True, 
-                    disabled=st.session_state.gemini_processing
-                ):
-                    st.session_state.gemini_processing = True
-                    st.rerun()
+            # 🎯 新增：改成「使用時才輸入」模式。系統後台若有設定好且驗證通過的金鑰會自動代入使用，
+            # 但也讓每個人可以在這裡直接貼上自己的 Gemini API Key（只存在您這次瀏覽器 session 記憶體中，
+            # 不會被記錄、寫入日誌或傳到後台資料庫）。這樣即使後台共用金鑰失效或額度用完，
+            # 同仁仍可用自己的金鑰繼續使用這個功能，不用等後台改設定。
+            manual_gemini_key = st.text_input(
+                "🔑 Gemini API Key（留空則自動使用系統後台金鑰；若後台金鑰失效，請在此貼上您自己的金鑰）",
+                type="password",
+                key="manual_gemini_key_input",
+                placeholder="AIza..."
+            )
+            system_key_usable = bool(st.session_state.get("gemini_key")) and st.session_state.get("gemini_key_validated")
+            active_gemini_key = manual_gemini_key.strip() or (st.session_state.get("gemini_key", "") if system_key_usable else "")
 
-                # 💡 【防爆機制 3】真正的 API 執行外殼，由 Session 狀態控制
-                if st.session_state.gemini_processing:
-                    with st.spinner("LLM AI正在深度雙語翻譯..."):
-                        try:
-                            import google.generativeai as genai
-                            genai.configure(api_key=st.session_state.gemini_key)
-                            
-                            # 🎯 2026-09 更新：改用已 GA（正式生產版）的 Gemini 3.8 Flash，較舊版 3.5 Flash 更新更穩定
-                            model = genai.GenerativeModel('gemini-3.8-flash')
-                            
-                            prompt = (
-                                "請讀取以下的單語 SRT 字幕檔。保留原本的序號與時間軸，保留原本族語文字作為第二行，在下方加上翻譯的繁體中文，每一段字幕留一空白行。"
-                                "請直接回傳純文字的完整雙語 SRT 內容，絕對不要用任何 markdown 程式碼區塊（如 ``` ）包覆。\n\n"
-                                f"原始 SRT：\n{edited_asr_text}"
-                            )
-                            response = model.generate_content(prompt)
-                            reply_text = response.text.strip()
-                            
-                            if reply_text.startswith("```"):
-                                # 🎯 修正：原正規表達式字元類別寫成 [a-zA-Oa-z]（誤植，大寫只到 O），
-                                # 導致語言標籤含大寫 P~Z（例如 ```SRT）時剝不掉 code fence，字幕檔會多出雜訊行
-                                reply_text = re.sub(r'^```[a-zA-Z]*\n', '', reply_text)
-                                reply_text = re.sub(r'\n```$', '', reply_text)
-                                reply_text = reply_text.strip()
-                                
-                            st.session_state.mt_result = reply_text
-                        except Exception as e:
-                            st.error(f"API 發生錯誤（請檢查模型名稱或金鑰）：{str(e)}")
-                        finally:
-                            # 💡 【防爆機制 4】無論成功或失敗，最後一定要解鎖，並強制刷新頁面釋放按鈕
-                            st.session_state.gemini_processing = False
-                            st.rerun()
-            else:
-                st.caption("💡 系統後台未偵測到有效金鑰，請檢查 HF Secrets 設定。")
-            
+            if manual_gemini_key.strip():
+                st.caption("✅ 將使用您剛輸入的金鑰（僅本次瀏覽器 session 使用）")
+            elif not active_gemini_key:
+                st.caption("💡 系統後台未偵測到有效金鑰，請在上方輸入您自己的 Gemini API Key 才能使用此功能。")
+
+            # 💡 【防爆機制 1】初始化安全狀態鎖與冷卻機制
+            if "gemini_processing" not in st.session_state:
+                st.session_state.gemini_processing = False
+
+            # 💡 【防爆機制 2】執行期間將按鈕禁用（Disabled），防止人類肉體連擊
+            # 🎯 隱形標記錨點：讓 utils.py 的 CSS 能穩定抓到「這顆」按鈕上紅色警示樣式，
+            # 不再依賴會被頁面改版打亂的第幾個元件計數（對應 utils.py 的 .ilrdf-gemini-btn-marker 規則）
+            st.markdown('<span class="ilrdf-gemini-btn-marker"></span>', unsafe_allow_html=True)
+            if st.button(
+                "🚀 AI直接翻譯雙語字幕",
+                key="gemini_flash_btn",
+                use_container_width=True,
+                disabled=st.session_state.gemini_processing or not active_gemini_key
+            ):
+                st.session_state.gemini_processing = True
+                st.rerun()
+
+            # 💡 【防爆機制 3】真正的 API 執行外殼，由 Session 狀態控制
+            if st.session_state.gemini_processing:
+                with st.spinner("LLM AI正在深度雙語翻譯..."):
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=active_gemini_key)
+
+                        # 🎯 2026-09 更新：改用已 GA（正式生產版）的 Gemini 3.8 Flash，較舊版 3.5 Flash 更新更穩定
+                        model = genai.GenerativeModel('gemini-3.8-flash')
+
+                        prompt = (
+                            "請讀取以下的單語 SRT 字幕檔。保留原本的序號與時間軸，保留原本族語文字作為第二行，在下方加上翻譯的繁體中文，每一段字幕留一空白行。"
+                            "請直接回傳純文字的完整雙語 SRT 內容，絕對不要用任何 markdown 程式碼區塊（如 ``` ）包覆。\n\n"
+                            f"原始 SRT：\n{edited_asr_text}"
+                        )
+                        response = model.generate_content(prompt)
+                        reply_text = response.text.strip()
+
+                        if reply_text.startswith("```"):
+                            # 🎯 修正：原正規表達式字元類別寫成 [a-zA-Oa-z]（誤植，大寫只到 O），
+                            # 導致語言標籤含大寫 P~Z（例如 ```SRT）時剝不掉 code fence，字幕檔會多出雜訊行
+                            reply_text = re.sub(r'^```[a-zA-Z]*\n', '', reply_text)
+                            reply_text = re.sub(r'\n```$', '', reply_text)
+                            reply_text = reply_text.strip()
+
+                        st.session_state.mt_result = reply_text
+                    except Exception as e:
+                        st.error(f"API 發生錯誤（請檢查模型名稱或金鑰）：{str(e)}")
+                    finally:
+                        # 💡 【防爆機制 4】無論成功或失敗，最後一定要解鎖，並強制刷新頁面釋放按鈕
+                        st.session_state.gemini_processing = False
+                        st.rerun()
+
             # 🎯 【修正對齊】以下大區塊脫離 Gemini 判斷，回歸大隊伍垂直切齊（12 個空格）
             st.markdown("---")
             st.subheader("2️⃣ 機器翻譯 (生成雙語 SRT)")

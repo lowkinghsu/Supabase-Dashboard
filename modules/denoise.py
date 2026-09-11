@@ -84,9 +84,19 @@ def process_media(source, atten_lim_db, user_name):
             save_audio(temp_clean, enhanced_audio, df_state.sr())
 
             if is_audio_only:
+                # 🎯 修正：原本不管輸出副檔名是什麼，永遠用 libmp3lame(MP3)編碼，
+                # 但輸出檔名卻沿用原始副檔名 -> .aac/.flac 檔案會被塞進不接受 MP3 的容器格式，
+                # ffmpeg 因此報錯「adts muxer supports only codec aac」。改成依副檔名選對應編碼器。
+                audio_codec_args = {
+                    ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
+                    ".aac": ["-c:a", "aac", "-b:a", "192k"],
+                    ".m4a": ["-c:a", "aac", "-b:a", "192k"],
+                    ".wav": ["-c:a", "pcm_s16le"],
+                    ".flac": ["-c:a", "flac"],
+                }.get(output_ext.lower(), ["-c:a", "libmp3lame", "-q:a", "2"])
                 cmd_merge = [
-                    "ffmpeg", "-y", "-i", temp_clean, "-c:a", "libmp3lame", 
-                    "-q:a", "2", output_path, "-hide_banner", "-loglevel", "error"
+                    "ffmpeg", "-y", "-i", temp_clean, *audio_codec_args,
+                    output_path, "-hide_banner", "-loglevel", "error"
                 ]
             else:
                 cmd_merge = [
