@@ -38,10 +38,11 @@ def process_media(source, atten_lim_db, user_name):
                     f.write(chunk)
 
             cmd_extract = [
-                "ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "pcm_s16le", 
+                "ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "pcm_s16le",
                 "-ar", "48000", "-ac", "1", temp_noisy, "-hide_banner", "-loglevel", "error"
             ]
-            subprocess.run(cmd_extract, check=True, capture_output=True)
+            # 🎯 修正：加上逾時保護，避免損毀檔案讓 ffmpeg 卡死不回應，佔用全域 CPU_LOCK 導致其他人全部卡住
+            subprocess.run(cmd_extract, check=True, capture_output=True, timeout=600)
 
             model, df_state = load_ai_model()
             from df.enhance import load_audio, save_audio, enhance
@@ -94,8 +95,8 @@ def process_media(source, atten_lim_db, user_name):
                     output_path, "-hide_banner", "-loglevel", "error"
                 ]
                 
-            subprocess.run(cmd_merge, check=True, capture_output=True)
-            
+            subprocess.run(cmd_merge, check=True, capture_output=True, timeout=1800)
+
             st.session_state.processed_file_path = output_path
             st.session_state.processed_file_name = final_output_name
             
@@ -108,11 +109,21 @@ def process_media(source, atten_lim_db, user_name):
             err_msg = e.stderr.decode("utf-8", errors="ignore") if e.stderr else "無詳細錯誤"
             full_err = f"FFmpeg 錯誤: {err_msg}"
             log_usage(user_name, original_name, file_size_mb, f"降噪 ({atten_lim_db}dB)", duration_sec, "失敗", full_err)
+            # 🎯 修正：失敗時原本不會清 work_dir，殘留的上傳檔/中間檔會一直佔用伺服器磁碟，
+            # 累積久了會導致其他人上傳/下載也跟著失敗或變慢
+            shutil.rmtree(work_dir, ignore_errors=True)
+            return False, full_err
+        except subprocess.TimeoutExpired:
+            duration_sec = round(time.time() - global_start_time, 1)
+            full_err = "FFmpeg 處理逾時（檔案可能損毀或過長），已自動中止"
+            log_usage(user_name, original_name, file_size_mb, f"降噪 ({atten_lim_db}dB)", duration_sec, "失敗", full_err)
+            shutil.rmtree(work_dir, ignore_errors=True)
             return False, full_err
         except Exception as e:
             duration_sec = round(time.time() - global_start_time, 1)
             full_err = f"發生錯誤: {str(e)}"
             log_usage(user_name, original_name, file_size_mb, f"降噪 ({atten_lim_db}dB)", duration_sec, "失敗", full_err)
+            shutil.rmtree(work_dir, ignore_errors=True)
             return False, full_err
 
 def render_denoise_page():

@@ -145,7 +145,7 @@ def render_asr_mt_page():
                 if "mt_result" in st.session_state:
                     del st.session_state.mt_result
                 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+                with tempfile.NamedTemporaryFile(delete=False, prefix="ilrdf_asr_", suffix=file_ext) as tmp_file:
                     asr_file.seek(0)
                     while True:
                         chunk = asr_file.read(4 * 1024 * 1024)
@@ -174,12 +174,14 @@ def render_asr_mt_page():
                         if file_ext in [".mp4", ".mov", ".avi"]:
                             st.write("✂️ 正在抽取音訊以加速傳輸...")
                             audio_path = input_path.replace(file_ext, ".wav")
-                            subprocess.run(["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path, "-loglevel", "error"], check=True)
+                            subprocess.run(["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", audio_path, "-loglevel", "error"], check=True, timeout=600)
                             upload_path = audio_path
 
                         st.write("🔗 正在連線至 ILRDF SRT 生成模型...")
                         from gradio_client import Client, handle_file
-                        client = Client("https://sapolita.ithuan.tw/")
+                        # 🎯 修正：明確設定連線逾時（180 秒），避免對方服務沒回應時，
+                        # 使用者的分頁無限期卡死轉圈圈（這是「辨識按鈕沒反應」的常見成因之一）
+                        client = Client("https://sapolita.ithuan.tw/", httpx_kwargs={"timeout": 180})
                         raw_result = client.predict(
                             audio={"video": handle_file(upload_path)},
                             api_name="/generate_srt"
@@ -212,6 +214,14 @@ def render_asr_mt_page():
                         log_usage(st.session_state.current_user, asr_file.name, file_size_mb, f"ASR辨識 ({selected_lang})", duration, "失敗", str(e))
                         status.update(label="❌ 辨識失敗", state="error")
                         st.error(f"API 呼叫發生錯誤：{str(e)}")
+                        # 🎯 修正：失敗時原本完全沒有清暫存檔，長期會把伺服器磁碟塞滿導致上傳/下載全部變慢或失敗，
+                        # 現在無論成功或失敗都確保清乾淨
+                        for leftover in (input_path, upload_path):
+                            try:
+                                if leftover and os.path.exists(leftover):
+                                    os.remove(leftover)
+                            except Exception:
+                                pass
     
     with col2:
         st.subheader("📝 字幕編輯與翻譯")
@@ -239,8 +249,11 @@ def render_asr_mt_page():
                     st.session_state.gemini_processing = False
 
                 # 💡 【防爆機制 2】執行期間將按鈕禁用（Disabled），防止人類肉體連擊
+                # 🎯 隱形標記錨點：讓 utils.py 的 CSS 能穩定抓到「這顆」按鈕上紅色警示樣式，
+                # 不再依賴會被頁面改版打亂的第幾個元件計數（對應 utils.py 的 .ilrdf-gemini-btn-marker 規則）
+                st.markdown('<span class="ilrdf-gemini-btn-marker"></span>', unsafe_allow_html=True)
                 if st.button(
-                    "🚀 AI直接翻譯雙語字幕", 
+                    "🚀 AI直接翻譯雙語字幕",
                     key="gemini_flash_btn", 
                     use_container_width=True, 
                     disabled=st.session_state.gemini_processing
@@ -255,8 +268,8 @@ def render_asr_mt_page():
                             import google.generativeai as genai
                             genai.configure(api_key=st.session_state.gemini_key)
                             
-                            # 2026年建議改為當時穩定的正式版模型名稱，例如 'gemini-3.5-flash'
-                            model = genai.GenerativeModel('gemini-3.5-flash') 
+                            # 🎯 2026-09 更新：改用已 GA（正式生產版）的 Gemini 3.8 Flash，較舊版 3.5 Flash 更新更穩定
+                            model = genai.GenerativeModel('gemini-3.8-flash')
                             
                             prompt = (
                                 "請讀取以下的單語 SRT 字幕檔。保留原本的序號與時間軸，保留原本族語文字作為第二行，在下方加上翻譯的繁體中文，每一段字幕留一空白行。"
@@ -267,7 +280,9 @@ def render_asr_mt_page():
                             reply_text = response.text.strip()
                             
                             if reply_text.startswith("```"):
-                                reply_text = re.sub(r'^```[a-zA-Oa-z]*\n', '', reply_text)
+                                # 🎯 修正：原正規表達式字元類別寫成 [a-zA-Oa-z]（誤植，大寫只到 O），
+                                # 導致語言標籤含大寫 P~Z（例如 ```SRT）時剝不掉 code fence，字幕檔會多出雜訊行
+                                reply_text = re.sub(r'^```[a-zA-Z]*\n', '', reply_text)
                                 reply_text = re.sub(r'\n```$', '', reply_text)
                                 reply_text = reply_text.strip()
                                 
@@ -291,7 +306,8 @@ def render_asr_mt_page():
                     try:
                         ethnicity_name = MT_ETHNICITY_MAP[selected_lang]
                         from gradio_client import Client
-                        mt_client = Client("https://ai-labs.ilrdf.org.tw/kari-seejiq-tnpusu-ai-hmjil/")
+                        # 🎯 修正：同樣加上逾時設定，避免翻譯服務沒回應時逐句卡死整個流程
+                        mt_client = Client("https://ai-labs.ilrdf.org.tw/kari-seejiq-tnpusu-ai-hmjil/", httpx_kwargs={"timeout": 60})
                         lang_code_response = mt_client.predict(ethnicity=ethnicity_name, api_name="/lambda")
                         actual_lang_code = lang_code_response['value'] if isinstance(lang_code_response, dict) and 'value' in lang_code_response else lang_code_response
                             
@@ -352,8 +368,9 @@ def render_asr_mt_page():
                             with st.status("正在將字幕燒錄至影片中...", expanded=True) as burn_status:
                                 start_time = time.time()
                                 with CPU_LOCK:
+                                    work_dir = None
                                     try:
-                                        work_dir = tempfile.mkdtemp()
+                                        work_dir = tempfile.mkdtemp(prefix="ilrdf_burn_")
                                         video_path = os.path.join(work_dir, "input_video" + current_file_ext)
                                         srt_path = os.path.join(work_dir, "subs.srt")
                                         output_path = os.path.join(work_dir, "output_hardsub.mp4")
@@ -372,11 +389,12 @@ def render_asr_mt_page():
                                         st.write("⚙️ 正在進行影像重新編碼與字幕渲染 (採用 Noto Sans CJK 字型)...")
                                         
                                         cmd = [
-                                            "ffmpeg", "-y", "-i", video_path, 
-                                            "-vf", f"subtitles='{srt_path_ff}':force_style='Fontname=Noto Sans CJK TC,FontSize=20,MarginV=15'", 
+                                            "ffmpeg", "-y", "-i", video_path,
+                                            "-vf", f"subtitles='{srt_path_ff}':force_style='Fontname=Noto Sans CJK TC,FontSize=20,MarginV=15'",
                                             "-c:a", "copy", output_path, "-loglevel", "error"
                                         ]
-                                        subprocess.run(cmd, check=True)
+                                        # 🎯 修正：加上逾時保護，避免損毀影片讓 ffmpeg 卡死不回應時佔用全域 CPU_LOCK 導致其他人全部卡住
+                                        subprocess.run(cmd, check=True, timeout=3600)
                                         
                                         with open(output_path, "rb") as f:
                                             out_video_bytes = f.read()
@@ -399,5 +417,8 @@ def render_asr_mt_page():
                                         log_usage(st.session_state.current_user, asr_file.name, round(asr_file.size/(1024*1024),2), "字幕燒錄", duration, "失敗", str(e))
                                         burn_status.update(label="❌ 燒錄失敗", state="error")
                                         st.error(f"FFmpeg 處理發生錯誤：{str(e)}")
+                                        # 🎯 修正：失敗時原本不會清 work_dir，殘留的影片檔會一直佔用伺服器磁碟
+                                        if work_dir:
+                                            shutil.rmtree(work_dir, ignore_errors=True)
         else:
             st.info("👈 請先在左側上傳影音檔並執行「生成 SRT 字幕」。")

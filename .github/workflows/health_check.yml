@@ -1,0 +1,27 @@
+name: ILRDF App Health Check
+
+on:
+  schedule:
+    # 每 3 小時檢查一次外部辨識(ASR)/翻譯(MT)服務是否正常回應
+    - cron: '0 */3 * * *'
+  push:
+    branches: [ master, main ]
+  workflow_dispatch: # 支援在 GitHub 網頁手動點擊「Run workflow」按鈕測試
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Check Python syntax of all project files
+        run: python healthcheck.py --syntax-only
+
+      - name: Run network-only health check (ASR / MT reachability)
+        run: python healthcheck.py --network-only

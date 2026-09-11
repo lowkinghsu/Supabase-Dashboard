@@ -5,6 +5,8 @@ import datetime
 import csv
 import uuid
 import threading
+import shutil
+import tempfile
 import torch
 import torchaudio
 import requests  # 用於 Supabase API 輕量傳輸
@@ -16,7 +18,123 @@ import io        # 用於 Supabase 資料轉為 CSV 記憶體字串
 CPU_LOCK = threading.Lock()
 
 # 🎯 優先從環境變數 (Secrets) 讀取管理員密碼，若未設定則使用備用密碼
+# ⚠️ 安全提醒：下方 fallback 密碼只是「本機測試沒設定環境變數時」的保險，
+# 正式站部署務必在 HF Secrets 設定 ADMIN_PASSWORD，否則等於後台密碼是公開原始碼裡的這行字。
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "FallbackDefaultPwd123!").strip()
+ADMIN_PASSWORD_IS_FALLBACK = "ADMIN_PASSWORD" not in os.environ or not os.environ.get("ADMIN_PASSWORD", "").strip()
+
+
+# ================= 🧹 暫存檔自動清理與系統健康檢測 =================
+
+# 🎯 本工作站所有處理模組建立暫存目錄/檔案時，一律使用下列專屬前綴，
+# 讓自動清理「只清得到我們自己留下的殘留」，絕不誤刪系統或其他程式的暫存檔。
+TEMP_PREFIXES = ("denoise_", "ilrdf_asr_", "ilrdf_burn_", "ilrdf_tools_")
+
+_last_cleanup_ts = 0.0
+_CLEANUP_INTERVAL_SEC = 600   # 每 10 分鐘最多真正掃描一次磁碟，避免每次網頁互動都掃描拖慢反應
+_STALE_AGE_HOURS = 2          # 超過這個時數還留在磁碟上的暫存檔，視為處理失敗留下的殘留，允許清除
+
+
+def _list_our_temp_entries():
+    """列出系統暫存目錄中，屬於本工作站（符合 TEMP_PREFIXES）的所有殘留項目"""
+    tmp_root = tempfile.gettempdir()
+    entries = []
+    try:
+        for name in os.listdir(tmp_root):
+            if name.startswith(TEMP_PREFIXES):
+                entries.append(os.path.join(tmp_root, name))
+    except OSError:
+        pass
+    return entries
+
+
+def _entry_size_bytes(path):
+    try:
+        if os.path.isdir(path):
+            return sum(
+                os.path.getsize(os.path.join(dp, f))
+                for dp, _, files in os.walk(path) for f in files
+            )
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def cleanup_stale_temp_files(max_age_hours=_STALE_AGE_HOURS):
+    """實際執行清理：刪除超過時限的本工作站殘留暫存檔/目錄，回傳 (刪除數量, 釋放MB)"""
+    cutoff = time.time() - max_age_hours * 3600
+    removed_count = 0
+    freed_bytes = 0
+    for path in _list_our_temp_entries():
+        try:
+            if os.path.getmtime(path) >= cutoff:
+                continue
+            freed_bytes += _entry_size_bytes(path)
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+            removed_count += 1
+        except OSError:
+            continue
+    return removed_count, round(freed_bytes / (1024 * 1024), 2)
+
+
+def maybe_run_background_cleanup():
+    """輕量守門：每 10 分鐘才真正掃描一次磁碟，其餘時間直接跳過，不拖慢正常頁面互動"""
+    global _last_cleanup_ts
+    now = time.time()
+    if now - _last_cleanup_ts < _CLEANUP_INTERVAL_SEC:
+        return
+    _last_cleanup_ts = now
+    try:
+        cleanup_stale_temp_files()
+    except Exception:
+        pass
+
+
+def get_system_health():
+    """供管理員後台「系統健康檢查」使用：回傳磁碟、暫存檔、外部服務連線狀態的即時快照"""
+    health = {}
+
+    try:
+        total, _used, free = shutil.disk_usage(tempfile.gettempdir())
+        health["disk_free_gb"] = round(free / (1024 ** 3), 2)
+        health["disk_total_gb"] = round(total / (1024 ** 3), 2)
+    except Exception:
+        health["disk_free_gb"] = None
+        health["disk_total_gb"] = None
+
+    entries = _list_our_temp_entries()
+    health["temp_item_count"] = len(entries)
+    health["temp_usage_mb"] = round(sum(_entry_size_bytes(p) for p in entries) / (1024 * 1024), 2)
+
+    health["ffmpeg_ok"] = shutil.which("ffmpeg") is not None
+
+    # 外部關鍵服務連線檢測（辨識 ASR / 翻譯 MT），皆設短逾時避免拖住健康檢查本身
+    services = {
+        "ASR辨識服務 (sapolita.ithuan.tw)": "https://sapolita.ithuan.tw/",
+        "MT翻譯服務 (ai-labs.ilrdf.org.tw)": "https://ai-labs.ilrdf.org.tw/kari-seejiq-tnpusu-ai-hmjil/",
+    }
+    service_status = {}
+    for label, url in services.items():
+        start = time.time()
+        try:
+            res = requests.get(url, timeout=6)
+            service_status[label] = {
+                "ok": res.status_code < 500,
+                "status_code": res.status_code,
+                "latency_ms": round((time.time() - start) * 1000),
+            }
+        except Exception as e:
+            service_status[label] = {
+                "ok": False,
+                "status_code": None,
+                "latency_ms": None,
+                "error": str(e)[:120],
+            }
+    health["services"] = service_status
+    return health
 
 # ================= 📊 系統初始化與視覺 =================
 
@@ -152,16 +270,19 @@ def inject_css():
             white-space: nowrap !important;
         }
 
-        /* 3️⃣ 🎯 終極修正：免金鑰結構定位線路！精準抓取右側欄位（column 2）的第 4 個組件（即 AI 直接翻譯按鈕） */
-        div[data-testid="column"]:nth-child(2) div[data-testid="element-container"]:nth-child(4) .stButton button {
+        /* 3️⃣ 🎯 穩定版：用「隱形標記錨點」抓取 AI 直接翻譯按鈕。
+           ⚠️ 舊版用「第幾個元件」硬編位置(nth-child)，只要頁面上其他地方增減一個元件，
+           位置就會全部偏移，導致跑版或誤套到別的按鈕——這是這次抓到的真實 bug，已改用不受頁面異動影響的標記寫法。
+           標記本身由 modules/asr_mt.py 在按鈕正上方插入 .ilrdf-gemini-btn-marker */
+        div[data-testid="element-container"]:has(.ilrdf-gemini-btn-marker) + div[data-testid="element-container"] .stButton button {
             background-color: #FFF5F5 !important; /* 溫柔、具提醒感的消光淡紅色 */
             color: #C53030 !important;            /* 顯眼的深紅色文字 */
             border: 2px solid #FEB2B2 !important; /* 淺紅細邊框襯托 */
             width: 100% !important;               /* 完美滿格 */
         }
-        
+
         /* 滑鼠懸停時的紅潤微光動態效果 */
-        div[data-testid="column"]:nth-child(2) div[data-testid="element-container"]:nth-child(4) .stButton button:hover {
+        div[data-testid="element-container"]:has(.ilrdf-gemini-btn-marker) + div[data-testid="element-container"] .stButton button:hover {
             background-color: #FED7D7 !important;
             transform: translateY(-2px) !important;
             box-shadow: 0 4px 12px rgba(229, 62, 62, 0.3) !important; /* 紅色高階防護微光 */
