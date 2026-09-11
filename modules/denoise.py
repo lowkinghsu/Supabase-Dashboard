@@ -62,7 +62,19 @@ def process_media(source, atten_lim_db, user_name):
                 end_idx = min(start_idx + chunk_size, total_samples)
                 
                 audio_chunk = audio[:, start_idx:end_idx]
+                expected_len = end_idx - start_idx
                 clean_chunk = enhance(model, df_state, audio_chunk, atten_lim_db=atten_lim_db)
+
+                # 🎯 修正：enhance() 每次呼叫對每一小段獨立處理時，輸出長度不保證跟輸入完全一致
+                # （模型本身的 lookahead/幀對齊會讓每一段多墊一點點樣本）。切成越多段，累積誤差越大——
+                # 實測 10 分鐘音檔切 51 段，最後總長度多了 123 秒(+24%)，跟原始音檔完全兌不起來。
+                # 這裡強制把每一段裁切/補齊回原本切下去的長度，確保串接後的總長度跟原始音檔一模一樣。
+                actual_len = clean_chunk.shape[-1]
+                if actual_len > expected_len:
+                    clean_chunk = clean_chunk[..., :expected_len]
+                elif actual_len < expected_len:
+                    clean_chunk = torch.nn.functional.pad(clean_chunk, (0, expected_len - actual_len))
+
                 enhanced_chunks.append(clean_chunk)
                 
                 current_progress = (i + 1) / num_chunks
