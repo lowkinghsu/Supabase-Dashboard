@@ -51,13 +51,21 @@
 
 ## 四、 常用維運指令
 
+⚠️ **2026-09-11 重大修正**：origin 這個 Hugging Face Space 實際部署的分支是 `main`，**不是** `master`！
+過去只推 `master` 完全不會觸發正式站重新部署（`git ls-remote` 可看到 `origin` 上 `main` 跟 `master` 是兩條分支）。
+`main` 上還曾經有人直接透過 HF 網頁編輯器改過 `requirements.txt`（把 `gradio_client` 從 `==1.3.0` 改成
+`>=1.5.0` 這種未鎖版本，2026-08-19，作者顯示為 `ILRDF-Lowking@users.noreply.huggingface.co`），這個改動
+只存在於 `main`，從來沒進過我們本地這條 git 歷史，直到這次合併才發現、才鎖回明確版本號。
+以後**務必同時推 `main` 跟 `master`**，並留意如果又在 HF 網頁上直接編輯過檔案，本地要記得先 `git fetch origin main` 再合併，別直接覆蓋。
+
 ```powershell
 # 1. 本地啟動伺服器
 streamlit run app.py --server.port=7860
 
-# 2. 推送至 Hugging Face Spaces
-git push origin master
+# 2. 推送至 Hugging Face Spaces（main 才是實際部署分支！）
+git push origin master:main
+git push origin master:master
 
 # 3. 推送至 GitHub 保活倉庫
-git push github master
+git push github master:master
 ```
