@@ -46,12 +46,33 @@ def process_media(source, atten_lim_db, user_name):
 
             model, df_state = load_ai_model()
             from df.enhance import load_audio, save_audio, enhance
-            
+
+            # 🔍 【暫時診斷用】上次修正後時長問題依然存在（甚至變更嚴重），
+            # 先確認 ffmpeg 抽取出來的「真實時長」跟 load_audio() 讀進來的時長是否一致，
+            # 藉此判斷問題是出在 load_audio()/取樣率換算，還是出在後面逐段處理的環節。
+            try:
+                probe_out = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", temp_noisy],
+                    capture_output=True, text=True, timeout=30
+                )
+                true_duration_sec = float(probe_out.stdout.strip())
+            except Exception:
+                true_duration_sec = None
+
             audio, _ = load_audio(temp_noisy, sr=df_state.sr())
             total_samples = audio.shape[-1]
-            chunk_size = df_state.sr() * 10 
+            loaded_duration_sec = total_samples / df_state.sr()
+            st.caption(
+                f"🔍 除錯診斷：ffmpeg抽取後真實時長 = {true_duration_sec:.2f}秒 | "
+                f"load_audio()讀到的時長 = {loaded_duration_sec:.2f}秒 | df_state.sr() = {df_state.sr()}"
+                if true_duration_sec is not None else
+                f"🔍 除錯診斷：load_audio()讀到的時長 = {loaded_duration_sec:.2f}秒 | df_state.sr() = {df_state.sr()}（ffprobe量測失敗）"
+            )
+
+            chunk_size = df_state.sr() * 10
             num_chunks = (total_samples + chunk_size - 1) // chunk_size
-            
+
             progress_bar = st.progress(0)
             time_text = st.empty()
             enhanced_chunks = []
@@ -70,6 +91,9 @@ def process_media(source, atten_lim_db, user_name):
                 # 實測 10 分鐘音檔切 51 段，最後總長度多了 123 秒(+24%)，跟原始音檔完全兌不起來。
                 # 這裡強制把每一段裁切/補齊回原本切下去的長度，確保串接後的總長度跟原始音檔一模一樣。
                 actual_len = clean_chunk.shape[-1]
+                if i == 0:
+                    # 🔍 【暫時診斷用】只印第一段，確認 enhance() 本身輸出長度是否真的跟輸入不一致
+                    st.caption(f"🔍 除錯診斷：第1段 輸入樣本數={expected_len}, enhance()輸出樣本數={actual_len}, shape={tuple(clean_chunk.shape)}")
                 if actual_len > expected_len:
                     clean_chunk = clean_chunk[..., :expected_len]
                 elif actual_len < expected_len:
@@ -86,6 +110,11 @@ def process_media(source, atten_lim_db, user_name):
                 time_text.markdown(f"**🤖 AI 運算中:** `已完成 {int(current_progress*100)}%` | `剩餘約 {remaining_time} 秒`")
 
             enhanced_audio = torch.cat(enhanced_chunks, dim=-1)
+            # 🔍 【暫時診斷用】確認串接後的總長度，是否真的等於一開始 load_audio 讀到的長度
+            st.caption(
+                f"🔍 除錯診斷：{num_chunks}段串接後總樣本數={enhanced_audio.shape[-1]} "
+                f"(預期={total_samples}) | 換算時長={enhanced_audio.shape[-1]/df_state.sr():.2f}秒"
+            )
             target_db = -1.0
             target_amplitude = 10 ** (target_db / 20)
             max_amplitude = torch.max(torch.abs(enhanced_audio))
@@ -94,6 +123,17 @@ def process_media(source, atten_lim_db, user_name):
                 enhanced_audio = enhanced_audio * (target_amplitude / max_amplitude)
 
             save_audio(temp_clean, enhanced_audio, df_state.sr())
+
+            # 🔍 【暫時診斷用】確認寫成 wav 檔之後，實際檔案的時長是否跟前面算出來的一致
+            try:
+                probe_clean = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", temp_clean],
+                    capture_output=True, text=True, timeout=30
+                )
+                st.caption(f"🔍 除錯診斷：save_audio()寫出的wav檔實際時長 = {float(probe_clean.stdout.strip()):.2f}秒")
+            except Exception:
+                pass
 
             if is_audio_only:
                 # 🎯 修正：原本不管輸出副檔名是什麼，永遠用 libmp3lame(MP3)編碼，
