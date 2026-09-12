@@ -132,6 +132,7 @@ def render_asr_mt_page():
         # 🎯 修正：原本漏了 aac（降噪頁面、log_usage 都早就把 aac 當成合法音檔），
         # 造成使用者在這裡連選都選不到 .aac 檔案
         asr_file = st.file_uploader("請上傳要辨識的影音檔", type=["wav", "mp3", "m4a", "aac", "flac", "mp4", "mov", "avi"])
+        st.caption("📶 大型檔案上傳建議使用 Wi-Fi，行動網路(4G/5G)訊號不穩時容易上傳失敗中斷。")
         
         if asr_file:
             file_ext = os.path.splitext(asr_file.name)[1].lower()

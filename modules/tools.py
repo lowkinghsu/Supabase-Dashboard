@@ -17,6 +17,7 @@ def render_tools_page():
     with tab1:
         st.subheader("🎵 影片轉純音檔 (大幅縮小體積)")
         ext_file = st.file_uploader("請上傳影片檔", type=["mp4", "mov", "avi", "mkv"], key="ext_uploader")
+        st.caption("📶 大型檔案上傳建議使用 Wi-Fi，行動網路(4G/5G)訊號不穩時容易上傳失敗中斷。")
         if ext_file:
             if st.button("🚀 一鍵抽取音訊", use_container_width=True):
                 with st.status("處理中...", expanded=True) as status:
@@ -59,6 +60,7 @@ def render_tools_page():
         st.subheader("✂️ 片段剪輯 (無損裁切)")
         # 🎯 修正：跟辨識頁面同樣的遺漏，補上 aac/flac/mkv，跟 denoise.py 的完整清單對齊
         trim_file = st.file_uploader("請上傳影音檔", type=["mp4", "mov", "avi", "mkv", "wav", "mp3", "m4a", "aac", "flac"], key="trim_uploader")
+        st.caption("📶 大型檔案上傳建議使用 Wi-Fi，行動網路(4G/5G)訊號不穩時容易上傳失敗中斷。")
         if trim_file:
             col_t1, col_t2 = st.columns(2)
             with col_t1: start_time_str = st.text_input("開始時間 (格式 HH:MM:SS)", value="00:00:00")
@@ -104,6 +106,7 @@ def render_tools_page():
         st.subheader("🗜️ 格式轉換與壓縮")
         # 🎯 修正：補上 aac/avi/mkv，跟 denoise.py 的完整清單對齊
         conv_file = st.file_uploader("請上傳要轉換的檔案", type=["wav", "mp3", "m4a", "aac", "flac", "mp4", "mov", "avi", "mkv"], key="conv_uploader")
+        st.caption("📶 大型檔案上傳建議使用 Wi-Fi，行動網路(4G/5G)訊號不穩時容易上傳失敗中斷。")
         if conv_file:
             target_format = st.selectbox("請選擇目標格式：", [".mp3 (推薦)", ".m4a (音質佳)", ".wav (無損)"])
             target_ext = target_format.split(" ")[0]
@@ -153,6 +156,7 @@ def render_tools_page():
         st.subheader("🔗 影音合併 (無損拼接)")
         # 🎯 修正：補上 aac/flac/avi/mkv，跟 denoise.py 的完整清單對齊
         merge_files = st.file_uploader("請依序上傳要合併的檔案 (可多選)", type=["mp4", "mov", "avi", "mkv", "wav", "mp3", "m4a", "aac", "flac"], accept_multiple_files=True, key="merge_uploader")
+        st.caption("📶 大型檔案上傳建議使用 Wi-Fi，行動網路(4G/5G)訊號不穩時容易上傳失敗中斷。")
         if merge_files and len(merge_files) > 1:
             # 🎯 修正：ffmpeg concat 只能合併「副檔名/編碼格式一致」的檔案，混搭時原本只會噴出一長串難懂的
             # ffmpeg stderr，現在先在畫面上明確提示，不用等按下去才知道會失敗

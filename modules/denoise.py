@@ -192,6 +192,7 @@ def render_denoise_page():
         st.subheader("📥 檔案上傳")
         supported = ("mp4", "mov", "avi", "mkv", "wav", "mp3", "m4a", "aac", "flac")
         uploaded_file = st.file_uploader("請選擇要降噪的檔案", type=supported)
+        st.caption("📶 大型檔案上傳建議使用 Wi-Fi，行動網路(4G/5G)訊號不穩時容易上傳失敗中斷。")
         
         # 【修正新增：智慧重設線路】如果使用者拖入新檔案，自動清空舊成果，防止介面卡死空白
         if uploaded_file:
