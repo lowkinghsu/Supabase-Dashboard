@@ -47,29 +47,8 @@ def process_media(source, atten_lim_db, user_name):
             model, df_state = load_ai_model()
             from df.enhance import load_audio, save_audio, enhance
 
-            # 🔍 【暫時診斷用】上次修正後時長問題依然存在（甚至變更嚴重），
-            # 先確認 ffmpeg 抽取出來的「真實時長」跟 load_audio() 讀進來的時長是否一致，
-            # 藉此判斷問題是出在 load_audio()/取樣率換算，還是出在後面逐段處理的環節。
-            try:
-                probe_out = subprocess.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", temp_noisy],
-                    capture_output=True, text=True, timeout=30
-                )
-                true_duration_sec = float(probe_out.stdout.strip())
-            except Exception:
-                true_duration_sec = None
-
             audio, _ = load_audio(temp_noisy, sr=df_state.sr())
             total_samples = audio.shape[-1]
-            loaded_duration_sec = total_samples / df_state.sr()
-            st.caption(
-                f"🔍 除錯診斷：ffmpeg抽取後真實時長 = {true_duration_sec:.2f}秒 | "
-                f"load_audio()讀到的時長 = {loaded_duration_sec:.2f}秒 | df_state.sr() = {df_state.sr()}"
-                if true_duration_sec is not None else
-                f"🔍 除錯診斷：load_audio()讀到的時長 = {loaded_duration_sec:.2f}秒 | df_state.sr() = {df_state.sr()}（ffprobe量測失敗）"
-            )
-
             chunk_size = df_state.sr() * 10
             num_chunks = (total_samples + chunk_size - 1) // chunk_size
 
@@ -86,14 +65,14 @@ def process_media(source, atten_lim_db, user_name):
                 expected_len = end_idx - start_idx
                 clean_chunk = enhance(model, df_state, audio_chunk, atten_lim_db=atten_lim_db)
 
-                # 🎯 修正：enhance() 每次呼叫對每一小段獨立處理時，輸出長度不保證跟輸入完全一致
-                # （模型本身的 lookahead/幀對齊會讓每一段多墊一點點樣本）。切成越多段，累積誤差越大——
-                # 實測 10 分鐘音檔切 51 段，最後總長度多了 123 秒(+24%)，跟原始音檔完全兌不起來。
-                # 這裡強制把每一段裁切/補齊回原本切下去的長度，確保串接後的總長度跟原始音檔一模一樣。
+                # 🛡️ 安全網：強制每一段輸出長度跟輸入完全一致，避免萬一 enhance() 在某些邊界情況
+                # 輸出長度跟輸入不一致時，串接後累積誤差。
+                # （附註：先前懷疑的「.aac時長顯示變長」問題，經診斷確認並非這裡造成——
+                # 完整走過 ffmpeg抽取→load_audio→逐段enhance()→串接→save_audio 每一步，
+                # 實測時長全部精準吻合原始檔案；真正原因是 .aac(ADTS) 容器格式本身沒有可靠的
+                # 時長中繼資料，播放器/ffprobe 只能用「檔案大小÷位元率」去估算，估算值本來就會失準，
+                # 不代表音訊內容真的被拉長。這段安全網保留下來純粹是防禦性寫法，不影響效能。）
                 actual_len = clean_chunk.shape[-1]
-                if i == 0:
-                    # 🔍 【暫時診斷用】只印第一段，確認 enhance() 本身輸出長度是否真的跟輸入不一致
-                    st.caption(f"🔍 除錯診斷：第1段 輸入樣本數={expected_len}, enhance()輸出樣本數={actual_len}, shape={tuple(clean_chunk.shape)}")
                 if actual_len > expected_len:
                     clean_chunk = clean_chunk[..., :expected_len]
                 elif actual_len < expected_len:
@@ -110,11 +89,6 @@ def process_media(source, atten_lim_db, user_name):
                 time_text.markdown(f"**🤖 AI 運算中:** `已完成 {int(current_progress*100)}%` | `剩餘約 {remaining_time} 秒`")
 
             enhanced_audio = torch.cat(enhanced_chunks, dim=-1)
-            # 🔍 【暫時診斷用】確認串接後的總長度，是否真的等於一開始 load_audio 讀到的長度
-            st.caption(
-                f"🔍 除錯診斷：{num_chunks}段串接後總樣本數={enhanced_audio.shape[-1]} "
-                f"(預期={total_samples}) | 換算時長={enhanced_audio.shape[-1]/df_state.sr():.2f}秒"
-            )
             target_db = -1.0
             target_amplitude = 10 ** (target_db / 20)
             max_amplitude = torch.max(torch.abs(enhanced_audio))
@@ -123,17 +97,6 @@ def process_media(source, atten_lim_db, user_name):
                 enhanced_audio = enhanced_audio * (target_amplitude / max_amplitude)
 
             save_audio(temp_clean, enhanced_audio, df_state.sr())
-
-            # 🔍 【暫時診斷用】確認寫成 wav 檔之後，實際檔案的時長是否跟前面算出來的一致
-            try:
-                probe_clean = subprocess.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", temp_clean],
-                    capture_output=True, text=True, timeout=30
-                )
-                st.caption(f"🔍 除錯診斷：save_audio()寫出的wav檔實際時長 = {float(probe_clean.stdout.strip()):.2f}秒")
-            except Exception:
-                pass
 
             if is_audio_only:
                 # 🎯 修正：原本不管輸出副檔名是什麼，永遠用 libmp3lame(MP3)編碼，
@@ -158,18 +121,6 @@ def process_media(source, atten_lim_db, user_name):
                 ]
                 
             subprocess.run(cmd_merge, check=True, capture_output=True, timeout=1800)
-
-            # 🔍 【暫時診斷用】確認最終合併輸出檔案本身的時長，前面全部都對得起來，
-            # 這裡如果還是偏移，代表問題就出在這段 ffmpeg 轉檔指令本身
-            try:
-                probe_final = subprocess.run(
-                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                     "-of", "default=noprint_wrappers=1:nokey=1", output_path],
-                    capture_output=True, text=True, timeout=30
-                )
-                st.caption(f"🔍 除錯診斷：最終輸出檔案({output_ext})實際時長 = {float(probe_final.stdout.strip()):.2f}秒")
-            except Exception:
-                pass
 
             st.session_state.processed_file_path = output_path
             st.session_state.processed_file_name = final_output_name
@@ -298,11 +249,14 @@ def render_denoise_page():
             with open(st.session_state.processed_file_path, "rb") as f:
                 bytes_data = f.read()
                 
-            if file_ext in (".mp4", ".mov", ".avi", ".mkv"): 
+            if file_ext in (".mp4", ".mov", ".avi", ".mkv"):
                 st.video(bytes_data)
-            else: 
+            else:
                 st.audio(bytes_data)
-                
+
+            if file_ext == ".aac":
+                st.caption("ℹ️ .aac 格式檔案在部分播放器/工具顯示的時長可能不準確（AAC裸流格式本身沒有可靠的時長中繼資料，播放器只能用檔案大小去估算），這只是顯示上的誤差，實際音訊內容正確無誤。")
+
             st.download_button(
                 label=f"⬇️ 下載降噪後檔案 ({st.session_state.processed_file_name})", 
                 data=bytes_data, 
