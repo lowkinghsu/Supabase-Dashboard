@@ -159,6 +159,18 @@ def process_media(source, atten_lim_db, user_name):
                 
             subprocess.run(cmd_merge, check=True, capture_output=True, timeout=1800)
 
+            # 🔍 【暫時診斷用】確認最終合併輸出檔案本身的時長，前面全部都對得起來，
+            # 這裡如果還是偏移，代表問題就出在這段 ffmpeg 轉檔指令本身
+            try:
+                probe_final = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                     "-of", "default=noprint_wrappers=1:nokey=1", output_path],
+                    capture_output=True, text=True, timeout=30
+                )
+                st.caption(f"🔍 除錯診斷：最終輸出檔案({output_ext})實際時長 = {float(probe_final.stdout.strip()):.2f}秒")
+            except Exception:
+                pass
+
             st.session_state.processed_file_path = output_path
             st.session_state.processed_file_name = final_output_name
             
